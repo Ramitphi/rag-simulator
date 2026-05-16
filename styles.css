@@ -293,7 +293,7 @@ h1 {
 
 .lever,
 .ghost-btn,
-#quickSpinBtn {
+.stage-action {
   min-height: 44px;
   border-radius: var(--radius);
   padding: 0 16px;
@@ -313,9 +313,14 @@ h1 {
 
 .lever:hover,
 .ghost-btn:hover,
-#quickSpinBtn:hover {
+.stage-action:hover:not(:disabled) {
   transform: translateY(-1px);
   filter: brightness(1.03);
+}
+
+button:disabled {
+  cursor: not-allowed;
+  opacity: 0.48;
 }
 
 .lever-knob {
@@ -330,6 +335,15 @@ h1 {
   border: 1px solid rgba(255,255,255,0.22);
   background: rgba(255,255,255,0.12);
   color: var(--paper);
+}
+
+.reel.done {
+  border-color: #ffe28a;
+  box-shadow: 0 0 0 3px rgba(255,226,138,0.20), inset 0 0 20px rgba(46,123,85,0.10);
+}
+
+.reel.active {
+  transform: translateY(-2px);
 }
 
 .control-panel,
@@ -362,6 +376,10 @@ h1 {
   color: var(--muted);
   font-size: 12px;
   font-weight: 900;
+}
+
+.panel-head.compact {
+  margin: 0 0 4px;
 }
 
 label {
@@ -433,14 +451,46 @@ input[type="range"] {
 }
 
 .query-row {
-  display: grid;
-  grid-template-columns: 1fr auto;
-  gap: 10px;
+  display: block;
 }
 
-#quickSpinBtn {
+.action-stack {
+  display: grid;
+  gap: 10px;
+  margin-top: 16px;
+}
+
+.action-stack.two {
+  grid-template-columns: 1fr;
+}
+
+.stage-action {
+  width: 100%;
+  justify-content: flex-start;
   background: var(--ink);
   color: #fff;
+  min-height: 48px;
+  box-shadow: 0 10px 22px rgba(25,27,24,0.14);
+}
+
+.stage-action span {
+  width: 28px;
+  height: 28px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: rgba(255,255,255,0.18);
+  font-size: 12px;
+}
+
+.stage-action.done {
+  background: linear-gradient(180deg, #2e7b55, #245f43);
+}
+
+.query-panel {
+  margin-top: 18px;
+  padding-top: 16px;
+  border-top: 1px solid var(--line);
 }
 
 .results-grid {
@@ -531,6 +581,11 @@ input[type="range"] {
   gap: 12px;
 }
 
+.step-card.done {
+  border-color: rgba(46,123,85,0.45);
+  background: #f5fbf6;
+}
+
 .step-top {
   display: grid;
   justify-items: start;
@@ -607,7 +662,6 @@ input[type="range"] {
   .topbar,
   .scoreboard,
   .control-grid,
-  .query-row,
   .step-card {
     grid-template-columns: 1fr;
   }
@@ -635,7 +689,7 @@ input[type="range"] {
 
   .lever,
   .ghost-btn,
-  #quickSpinBtn {
+  .stage-action {
     width: 100%;
   }
 }

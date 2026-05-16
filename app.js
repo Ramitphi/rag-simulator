@@ -43,25 +43,30 @@ const vocabulary = [
 ];
 
 const state = {
-  spins: 0,
   score: 0,
   cleaned: "",
   chunks: [],
   vectors: [],
+  storedRecords: [],
   queryVector: [],
   ranked: [],
   answer: "",
-  isSpinning: false
+  activeStage: "",
+  completed: new Set(),
+  isAnimating: false
 };
 
 const el = {
   reels: document.getElementById("reels"),
   machineStatus: document.getElementById("machineStatus"),
   winLineText: document.getElementById("winLineText"),
-  spinBtn: document.getElementById("spinBtn"),
-  quickSpinBtn: document.getElementById("quickSpinBtn"),
   sampleBtn: document.getElementById("sampleBtn"),
   resetBtn: document.getElementById("resetBtn"),
+  chunkBtn: document.getElementById("chunkBtn"),
+  embedBtn: document.getElementById("embedBtn"),
+  storeBtn: document.getElementById("storeBtn"),
+  retrieveBtn: document.getElementById("retrieveBtn"),
+  answerBtn: document.getElementById("answerBtn"),
   documentInput: document.getElementById("documentInput"),
   queryInput: document.getElementById("queryInput"),
   chunkSize: document.getElementById("chunkSize"),
@@ -72,14 +77,15 @@ const el = {
   topKValue: document.getElementById("topKValue"),
   wordCount: document.getElementById("wordCount"),
   contextScore: document.getElementById("contextScore"),
-  spinCount: document.getElementById("spinCount"),
+  recordCount: document.getElementById("recordCount"),
+  queryStatus: document.getElementById("queryStatus"),
   answerBox: document.getElementById("answerBox"),
   retrievalList: document.getElementById("retrievalList"),
   steps: document.getElementById("steps")
 };
 
 function escapeHtml(value) {
-  return value.replace(/[&<>"']/g, char => ({
+  return String(value).replace(/[&<>"']/g, char => ({
     "&": "&amp;",
     "<": "&lt;",
     ">": "&gt;",
@@ -154,7 +160,7 @@ function importantTerms(text) {
 
 function makeAnswer(query, ranked) {
   if (!ranked.length || ranked[0].score < 0.05) {
-    return "No context jackpot this spin. The retrieved chunks are too weak, so a careful RAG system should say the source material is missing instead of making up an answer.";
+    return "No context jackpot this round. The retrieved chunks are too weak, so a careful RAG system should say the source material is missing instead of making up an answer.";
   }
 
   const terms = importantTerms(query);
@@ -175,19 +181,6 @@ function makeAnswer(query, ranked) {
   return `${picked.slice(0, 4).join(" ")}\n\nGrounding payout: ${ranked.map(item => item.id).join(", ")}.`;
 }
 
-function runPipeline() {
-  state.cleaned = cleanText(el.documentInput.value);
-  state.chunks = chunkText(state.cleaned, Number(el.chunkSize.value), Number(el.chunkOverlap.value));
-  state.vectors = state.chunks.map(chunk => ({ ...chunk, vector: vectorize(chunk.text) }));
-  state.queryVector = vectorize(el.queryInput.value);
-  state.ranked = state.vectors
-    .map(chunk => ({ ...chunk, score: cosine(state.queryVector, chunk.vector) }))
-    .sort((a, b) => b.score - a.score)
-    .slice(0, Number(el.topK.value));
-  state.answer = makeAnswer(el.queryInput.value, state.ranked);
-  state.score = Math.round((state.ranked[0]?.score || 0) * 100);
-}
-
 function symbolTemplate(symbol) {
   return `
     <div class="reel-symbol">
@@ -198,16 +191,12 @@ function symbolTemplate(symbol) {
   `;
 }
 
-function renderReels(symbols = stages) {
-  el.reels.innerHTML = stages.map((stage, index) => {
-    const symbol = symbols[index] || stage;
-    return `
-      <div class="reel" id="reel-${index}">
-        <div class="reel-window">${symbolTemplate(symbol)}</div>
-        <div class="reel-label">${stage.name}</div>
-      </div>
-    `;
-  }).join("");
+function randomSymbol() {
+  return spinSymbols[Math.floor(Math.random() * spinSymbols.length)];
+}
+
+function sleep(ms) {
+  return new Promise(resolve => setTimeout(resolve, ms));
 }
 
 function vectorBars(vector) {
@@ -218,9 +207,167 @@ function vectorBars(vector) {
   `;
 }
 
+function resetAllProgress() {
+  state.score = 0;
+  state.cleaned = "";
+  state.chunks = [];
+  state.vectors = [];
+  state.storedRecords = [];
+  state.queryVector = [];
+  state.ranked = [];
+  state.answer = "";
+  state.activeStage = "";
+  state.completed = new Set();
+}
+
+function resetAfterChunks() {
+  state.vectors = [];
+  state.storedRecords = [];
+  state.queryVector = [];
+  state.ranked = [];
+  state.answer = "";
+  state.score = 0;
+  state.completed.delete("embed");
+  state.completed.delete("store");
+  state.completed.delete("retrieve");
+  state.completed.delete("answer");
+}
+
+function resetAfterEmbeddings() {
+  state.storedRecords = [];
+  state.queryVector = [];
+  state.ranked = [];
+  state.answer = "";
+  state.score = 0;
+  state.completed.delete("store");
+  state.completed.delete("retrieve");
+  state.completed.delete("answer");
+}
+
+function resetAfterStore() {
+  state.queryVector = [];
+  state.ranked = [];
+  state.answer = "";
+  state.score = 0;
+  state.completed.delete("retrieve");
+  state.completed.delete("answer");
+}
+
+function resetAfterQuery() {
+  state.queryVector = [];
+  state.ranked = [];
+  state.answer = "";
+  state.score = 0;
+  state.completed.delete("retrieve");
+  state.completed.delete("answer");
+}
+
+function renderReels() {
+  el.reels.innerHTML = stages.map((stage, index) => {
+    const isDone = state.completed.has(stage.id);
+    const isActive = state.activeStage === stage.id;
+    const symbol = isDone || isActive ? stage : { name: "Locked", code: "???", detail: "waiting", accent: "#6f6b63" };
+    return `
+      <div class="reel ${isDone ? "done" : ""} ${isActive ? "active" : ""}" id="reel-${index}">
+        <div class="reel-window">${symbolTemplate(symbol)}</div>
+        <div class="reel-label">${stage.name}</div>
+      </div>
+    `;
+  }).join("");
+}
+
+async function animateStage(stageIds) {
+  const ids = Array.isArray(stageIds) ? stageIds : [stageIds];
+  state.isAnimating = true;
+  renderControls();
+
+  const indexes = ids.map(id => stages.findIndex(stage => stage.id === id)).filter(index => index >= 0);
+  const intervals = indexes.map(index => {
+    const reel = document.getElementById(`reel-${index}`);
+    reel.classList.add("spinning");
+    return window.setInterval(() => {
+      reel.querySelector(".reel-window").innerHTML = symbolTemplate(randomSymbol());
+    }, 80 + index * 15);
+  });
+
+  await sleep(520);
+
+  indexes.forEach((index, offset) => {
+    window.clearInterval(intervals[offset]);
+    const stage = stages[index];
+    const reel = document.getElementById(`reel-${index}`);
+    reel.classList.remove("spinning");
+    reel.querySelector(".reel-window").innerHTML = symbolTemplate(stage);
+  });
+
+  state.isAnimating = false;
+  renderAll();
+}
+
+async function generateChunks() {
+  state.cleaned = cleanText(el.documentInput.value);
+  state.chunks = chunkText(state.cleaned, Number(el.chunkSize.value), Number(el.chunkOverlap.value));
+  resetAfterChunks();
+  state.completed.add("clean");
+  state.completed.add("chunk");
+  state.activeStage = "chunk";
+  el.machineStatus.textContent = "Chunks generated";
+  await animateStage(["clean", "chunk"]);
+}
+
+async function generateEmbeddings() {
+  if (!state.chunks.length) return;
+  state.vectors = state.chunks.map(chunk => ({ ...chunk, vector: vectorize(chunk.text) }));
+  resetAfterEmbeddings();
+  state.completed.add("embed");
+  state.activeStage = "embed";
+  el.machineStatus.textContent = "Embeddings generated";
+  await animateStage("embed");
+}
+
+async function storeVectorDb() {
+  if (!state.vectors.length) return;
+  state.storedRecords = state.vectors.map(chunk => ({
+    id: chunk.id,
+    metadata: `words ${chunk.start}-${chunk.end}`,
+    text: chunk.text,
+    vector: chunk.vector
+  }));
+  resetAfterStore();
+  state.completed.add("store");
+  state.activeStage = "store";
+  el.machineStatus.textContent = "Vector DB loaded";
+  await animateStage("store");
+}
+
+async function retrieveChunks() {
+  if (!state.storedRecords.length) return;
+  state.queryVector = vectorize(el.queryInput.value);
+  state.ranked = state.storedRecords
+    .map(record => ({ ...record, score: cosine(state.queryVector, record.vector) }))
+    .sort((a, b) => b.score - a.score)
+    .slice(0, Number(el.topK.value));
+  state.answer = "";
+  state.score = Math.round((state.ranked[0]?.score || 0) * 100);
+  state.completed.add("retrieve");
+  state.completed.delete("answer");
+  state.activeStage = "retrieve";
+  el.machineStatus.textContent = "Relevant chunks retrieved";
+  await animateStage("retrieve");
+}
+
+async function generateAnswer() {
+  if (!state.ranked.length) return;
+  state.answer = makeAnswer(el.queryInput.value, state.ranked);
+  state.completed.add("answer");
+  state.activeStage = "answer";
+  el.machineStatus.textContent = "Answer generated";
+  await animateStage("answer");
+}
+
 function renderRetrieval() {
   if (!state.ranked.length) {
-    el.retrievalList.innerHTML = `<div class="empty">The payline will show the chunks with the strongest similarity scores.</div>`;
+    el.retrievalList.innerHTML = `<div class="empty">After storing vectors, enter a query and tap Retrieve Relevant Chunks.</div>`;
     return;
   }
 
@@ -237,131 +384,142 @@ function renderRetrieval() {
 }
 
 function renderSteps() {
-  const chunkPreview = state.chunks.slice(0, 3).map(chunk => `${chunk.id}: ${chunk.text.slice(0, 95)}${chunk.text.length > 95 ? "..." : ""}`).join("<br>");
-  const vectorPreview = state.vectors.slice(0, 3).map(chunk => `${chunk.id} ${vectorBars(chunk.vector)}`).join("");
-  const promptPreview = state.ranked.map(item => `[${item.id}] ${item.text.slice(0, 130)}${item.text.length > 130 ? "..." : ""}`).join("<br><br>");
+  const cleanPreview = state.cleaned
+    ? `${words(state.cleaned).length} clean words. Preview: ${escapeHtml(state.cleaned.slice(0, 180))}${state.cleaned.length > 180 ? "..." : ""}`
+    : "Tap Generate Chunks to clean the document first.";
+  const chunkPreview = state.chunks.length
+    ? state.chunks.slice(0, 3).map(chunk => `${chunk.id}: ${escapeHtml(chunk.text.slice(0, 95))}${chunk.text.length > 95 ? "..." : ""}`).join("<br>")
+    : "No chunks yet.";
+  const vectorPreview = state.vectors.length
+    ? state.vectors.slice(0, 3).map(chunk => `${chunk.id} ${vectorBars(chunk.vector)}`).join("")
+    : "No embeddings yet.";
+  const storePreview = state.storedRecords.length
+    ? `${state.storedRecords.length} vector records are stored with chunk text, metadata, and embeddings.`
+    : "Vector DB is empty.";
+  const retrievePreview = state.ranked.length
+    ? `Query embedded and compared with stored vectors. Best match: ${state.ranked[0].id} at ${(state.ranked[0].score * 100).toFixed(1)}%.`
+    : "No chunks retrieved yet.";
+  const answerPreview = state.answer
+    ? "The LLM receives the original query and retrieved chunks, then writes the grounded answer shown in the payout card."
+    : "No answer generated yet.";
+
   const stepBodies = {
-    clean: `${words(state.cleaned).length} clean words. Extra spaces and noisy line breaks are normalized before retrieval starts.`,
-    chunk: chunkPreview || "No chunks yet.",
-    embed: vectorPreview || "No embeddings yet.",
-    store: `${state.vectors.length} vector records stored with chunk text and simple metadata.`,
-    retrieve: state.ranked.length ? `The query vector is compared against stored vectors. Best match: ${state.ranked[0].id} at ${(state.ranked[0].score * 100).toFixed(1)}%.` : "No retrieval yet.",
-    answer: promptPreview ? `The LLM receives the original question plus retrieved text, not the raw embedding numbers.<br><br>${promptPreview}` : "No prompt yet."
+    clean: cleanPreview,
+    chunk: chunkPreview,
+    embed: vectorPreview,
+    store: storePreview,
+    retrieve: retrievePreview,
+    answer: answerPreview
   };
 
-  el.steps.innerHTML = stages.map((stage, index) => `
-    <div class="step-card">
-      <div class="step-top">
-        <span class="step-number" style="--accent:${stage.accent}">${index + 1}</span>
-        <span class="step-name">${stage.name}</span>
-        <span class="symbol-detail">${stage.detail}</span>
+  el.steps.innerHTML = stages.map((stage, index) => {
+    const done = state.completed.has(stage.id);
+    return `
+      <div class="step-card ${done ? "done" : ""}">
+        <div class="step-top">
+          <span class="step-number" style="--accent:${stage.accent}">${index + 1}</span>
+          <span class="step-name">${stage.name}</span>
+          <span class="symbol-detail">${done ? "complete" : stage.detail}</span>
+        </div>
+        <div class="step-body">${stepBodies[stage.id]}</div>
       </div>
-      <div class="step-body">${stepBodies[stage.id]}</div>
-    </div>
-  `).join("");
+    `;
+  }).join("");
+}
+
+function renderControls() {
+  el.chunkBtn.disabled = state.isAnimating;
+  el.embedBtn.disabled = state.isAnimating || !state.chunks.length;
+  el.storeBtn.disabled = state.isAnimating || !state.vectors.length;
+  el.retrieveBtn.disabled = state.isAnimating || !state.storedRecords.length;
+  el.answerBtn.disabled = state.isAnimating || !state.ranked.length;
+
+  el.chunkBtn.classList.toggle("done", state.completed.has("chunk"));
+  el.embedBtn.classList.toggle("done", state.completed.has("embed"));
+  el.storeBtn.classList.toggle("done", state.completed.has("store"));
+  el.retrieveBtn.classList.toggle("done", state.completed.has("retrieve"));
+  el.answerBtn.classList.toggle("done", state.completed.has("answer"));
 }
 
 function renderStats() {
-  const wordTotal = words(el.documentInput.value).length;
-  el.wordCount.textContent = `${wordTotal} words`;
+  el.wordCount.textContent = `${words(el.documentInput.value).length} words`;
   el.chunkSizeValue.textContent = el.chunkSize.value;
   el.chunkOverlapValue.textContent = el.chunkOverlap.value;
   el.topKValue.textContent = el.topK.value;
   el.contextScore.textContent = state.score;
-  el.spinCount.textContent = state.spins;
+  el.recordCount.textContent = state.storedRecords.length;
+  el.queryStatus.textContent = state.completed.has("answer")
+    ? "answered"
+    : state.completed.has("retrieve")
+      ? "retrieved"
+      : state.storedRecords.length
+        ? "ready"
+        : "waiting";
 }
 
-function renderResults() {
+function renderWinLine() {
+  if (state.completed.has("answer")) {
+    el.winLineText.textContent = state.score >= 70 ? "Context jackpot: strong grounded answer" : "Answer payout: inspect the retrieved chunks";
+  } else if (state.completed.has("retrieve")) {
+    el.winLineText.textContent = "Chunks retrieved. Generate the answer next.";
+  } else if (state.completed.has("store")) {
+    el.winLineText.textContent = "Vector DB ready. Enter a query and retrieve.";
+  } else if (state.completed.has("embed")) {
+    el.winLineText.textContent = "Embeddings ready. Store them in the vector DB.";
+  } else if (state.completed.has("chunk")) {
+    el.winLineText.textContent = "Chunks ready. Generate embeddings next.";
+  } else {
+    el.winLineText.textContent = "Tap Generate Chunks to start the RAG run.";
+  }
+}
+
+function renderAll() {
   renderStats();
-  el.answerBox.textContent = state.answer || "Pull the lever to generate a grounded answer.";
+  renderControls();
+  renderReels();
   renderRetrieval();
   renderSteps();
-
-  if (!state.spins) {
-    el.winLineText.textContent = "Match the pipeline to win a grounded answer";
-  } else if (state.score >= 70) {
-    el.winLineText.textContent = "Context jackpot: strong retrieval";
-  } else if (state.score >= 35) {
-    el.winLineText.textContent = "Partial match: useful context, check citations";
-  } else {
-    el.winLineText.textContent = "Low match: answer should be cautious";
-  }
-}
-
-function randomSymbol() {
-  return spinSymbols[Math.floor(Math.random() * spinSymbols.length)];
-}
-
-function sleep(ms) {
-  return new Promise(resolve => setTimeout(resolve, ms));
-}
-
-async function spin() {
-  if (state.isSpinning) return;
-  state.isSpinning = true;
-  state.spins += 1;
-  el.machineStatus.textContent = "Reels spinning";
-  el.spinBtn.disabled = true;
-  el.quickSpinBtn.disabled = true;
-
-  const intervals = stages.map((_, index) => {
-    const reel = document.getElementById(`reel-${index}`);
-    reel.classList.add("spinning");
-    return window.setInterval(() => {
-      reel.querySelector(".reel-window").innerHTML = symbolTemplate(randomSymbol());
-    }, 85 + index * 12);
-  });
-
-  runPipeline();
-
-  for (let index = 0; index < stages.length; index += 1) {
-    await sleep(360 + index * 90);
-    window.clearInterval(intervals[index]);
-    const reel = document.getElementById(`reel-${index}`);
-    reel.classList.remove("spinning");
-    reel.querySelector(".reel-window").innerHTML = symbolTemplate(stages[index]);
-  }
-
-  el.machineStatus.textContent = state.score >= 70 ? "Context jackpot" : "Spin complete";
-  state.isSpinning = false;
-  el.spinBtn.disabled = false;
-  el.quickSpinBtn.disabled = false;
-  renderResults();
+  renderWinLine();
+  el.answerBox.textContent = state.answer || "After retrieving chunks, tap Generate Answer to create the final grounded response.";
 }
 
 function resetGame() {
-  state.spins = 0;
-  state.score = 0;
-  state.cleaned = "";
-  state.chunks = [];
-  state.vectors = [];
-  state.queryVector = [];
-  state.ranked = [];
-  state.answer = "";
-  el.machineStatus.textContent = "Ready for retrieval";
-  renderReels();
-  renderResults();
+  resetAllProgress();
+  el.machineStatus.textContent = "Ready to generate chunks";
+  renderAll();
 }
 
 function boot() {
   el.documentInput.value = sampleDoc;
-  renderReels();
-  runPipeline();
-  renderResults();
+  renderAll();
 
-  el.spinBtn.addEventListener("click", spin);
-  el.quickSpinBtn.addEventListener("click", spin);
+  el.chunkBtn.addEventListener("click", generateChunks);
+  el.embedBtn.addEventListener("click", generateEmbeddings);
+  el.storeBtn.addEventListener("click", storeVectorDb);
+  el.retrieveBtn.addEventListener("click", retrieveChunks);
+  el.answerBtn.addEventListener("click", generateAnswer);
+  el.resetBtn.addEventListener("click", resetGame);
   el.sampleBtn.addEventListener("click", () => {
     el.documentInput.value = sampleDoc;
-    spin();
+    resetGame();
   });
-  el.resetBtn.addEventListener("click", resetGame);
 
-  [el.documentInput, el.queryInput, el.chunkSize, el.chunkOverlap, el.topK].forEach(input => {
-    input.addEventListener("input", () => {
-      runPipeline();
-      renderResults();
-    });
+  el.documentInput.addEventListener("input", resetGame);
+  el.chunkSize.addEventListener("input", () => {
+    resetAllProgress();
+    renderAll();
+  });
+  el.chunkOverlap.addEventListener("input", () => {
+    resetAllProgress();
+    renderAll();
+  });
+  el.topK.addEventListener("input", () => {
+    resetAfterQuery();
+    renderAll();
+  });
+  el.queryInput.addEventListener("input", () => {
+    resetAfterQuery();
+    renderAll();
   });
 }
 

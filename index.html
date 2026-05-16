@@ -12,7 +12,7 @@
       <div>
         <p class="eyebrow">HTML only learning game</p>
         <h1>RAG Slot Machine</h1>
-        <p class="lede">Pull the lever to send a document through cleaning, chunking, embeddings, vector search, and answer generation.</p>
+        <p class="lede">Tap each stage in order and watch the reels lock in as your document becomes chunks, vectors, retrieved context, and a grounded answer.</p>
       </div>
       <div class="scoreboard" aria-label="Simulator score">
         <div>
@@ -20,8 +20,8 @@
           <strong id="contextScore">0</strong>
         </div>
         <div>
-          <span class="score-label">Spins</span>
-          <strong id="spinCount">0</strong>
+          <span class="score-label">Vector records</span>
+          <strong id="recordCount">0</strong>
         </div>
       </div>
     </header>
@@ -30,7 +30,7 @@
       <section class="cabinet" aria-label="RAG slot machine">
         <div class="cabinet-top">
           <span class="lamp"></span>
-          <span id="machineStatus">Ready for retrieval</span>
+          <span id="machineStatus">Ready to generate chunks</span>
           <span class="lamp"></span>
         </div>
 
@@ -38,23 +38,19 @@
 
         <div class="win-line">
           <span></span>
-          <strong id="winLineText">Match the pipeline to win a grounded answer</strong>
+          <strong id="winLineText">Tap the first stage to start the RAG run</strong>
           <span></span>
         </div>
 
         <div class="machine-controls">
-          <button class="lever" id="spinBtn" type="button">
-            <span class="lever-knob"></span>
-            <span>Pull Lever</span>
-          </button>
           <button class="ghost-btn" id="sampleBtn" type="button">Load Sample</button>
-          <button class="ghost-btn" id="resetBtn" type="button">Reset</button>
+          <button class="ghost-btn" id="resetBtn" type="button">Reset Run</button>
         </div>
       </section>
 
       <aside class="control-panel">
         <div class="panel-head">
-          <h2>Inputs</h2>
+          <h2>1. Build the knowledge base</h2>
           <span id="wordCount">0 words</span>
         </div>
 
@@ -79,10 +75,42 @@
           </div>
         </div>
 
-        <label for="queryInput">Player query</label>
-        <div class="query-row">
-          <input id="queryInput" type="text" value="How does RAG use embeddings and retrieved chunks?">
-          <button id="quickSpinBtn" type="button">Spin</button>
+        <div class="action-stack">
+          <button class="stage-action" id="chunkBtn" type="button">
+            <span>1</span>
+            Generate chunks
+          </button>
+          <button class="stage-action" id="embedBtn" type="button">
+            <span>2</span>
+            Generate embeddings
+          </button>
+          <button class="stage-action" id="storeBtn" type="button">
+            <span>3</span>
+            Store in vector DB
+          </button>
+        </div>
+
+        <div class="query-panel">
+          <div class="panel-head compact">
+            <h2>2. Ask and retrieve</h2>
+            <span id="queryStatus">waiting</span>
+          </div>
+
+          <label for="queryInput">User query</label>
+          <div class="query-row">
+            <input id="queryInput" type="text" value="How does RAG use embeddings and retrieved chunks?">
+          </div>
+
+          <div class="action-stack two">
+            <button class="stage-action" id="retrieveBtn" type="button">
+              <span>4</span>
+              Retrieve relevant chunks
+            </button>
+            <button class="stage-action" id="answerBtn" type="button">
+              <span>5</span>
+              Generate answer
+            </button>
+          </div>
         </div>
       </aside>
     </main>
